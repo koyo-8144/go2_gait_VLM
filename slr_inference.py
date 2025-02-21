@@ -7,7 +7,9 @@ from unitree_go.msg import LowState, SportModeState, LowCmd, IMUState, MotorStat
 import time
 import numpy as np
 import math
-#from unitree_sdk2py.utils.crc import CRC
+import sys
+# sys.path.append("/home/koyo/unitree_sdk2_python")
+# from unitree_sdk2py.utils.crc import CRC
 
 # import onnx
 # import onnxruntime
@@ -39,7 +41,7 @@ class SLRInference(Node):
         self.init_params()
 
         # For lowcmd
-        #self.crc = CRC()
+        # self.crc = CRC()
 
         # Initialize ros2 subs and pubs
         self.ros2_set()
@@ -213,7 +215,8 @@ class SLRInference(Node):
         #ROS2 settings
         self.lowstate_topic = "/lowstate"
         self.sportstate_topic = "/sportmodestate"
-        self.lowcmd_topic = "/lowcmd"
+        # self.lowcmd_topic = "/lowcmd"
+        self.lowcmd_topic = "/lowcmd_raw"
         if KEY_BOARD:
             self.cmd_topic = "/cmd_vel"
 
@@ -226,16 +229,9 @@ class SLRInference(Node):
         # Publisher
         self.lowcmd_puber = self.create_publisher(LowCmd, self.lowcmd_topic, 10)
 
-        #timer_period = 0.001 #callback to execute every 0.001 seconds (1000 Hz)
-        #works with policy_non_height_even_bh10_03_flat.onnx
-        # timer_period = 0.005 #callback to execute every 0.005 seconds (200 Hz) 
-        # timer_period = 0.01 #callback to execute every 0.01 seconds (100 Hz)
-        timer_period = 0.02 #callback to execute every 0.02 seconds (50 Hz)
-        #timer_period = 0.05 #callback to execute every 0.05 seconds (20 Hz)
-        # timer_period = 0.1 #callback to execute every 0.1 seconds (10 Hz)
-        #timer_period = 0.25 #callback to execute every 0.25 seconds (4 Hz)
-        #timer_period = 0.5
-        #timer_period = 1.0
+        timer_period = 0.005
+        # timer_period = 1.0
+
         self.timer_ = self.create_timer(timer_period, self.lowcmd_publish) #callback to execute every 0.02 seconds (50 Hz)
         
 
@@ -640,7 +636,12 @@ class SLRInference(Node):
         # target_pos = self.gym_to_ros2(target_pos_gym)
 
         cmd_msg = LowCmd()
+        cmd_msg.head[1] = 0xEF
+        cmd_msg.level_flag = 0xFF
+        cmd_msg.gpio = 0
+
         for i in range(12):
+            cmd_msg.motor_cmd[i].mode = 0x01
             # cmd_msg.motor_cmd[i].q = float(actions_list[i])  # Access the first element
             cmd_msg.motor_cmd[i].q = float(target_pos_gym[i])
             cmd_msg.motor_cmd[i].kp = self.kp  #25.0   #100.0   #25.0     # Position(rad) control kp gain
@@ -713,17 +714,27 @@ class SLRInference(Node):
     def standup(self):
         cmd_msg = LowCmd()
 
-        dt = 0.0005
+        # dt = 0.0005
+        # runing_time = 0.0
+        dt = 0.002
         runing_time = 0.0
 
         while True:
             runing_time += dt
-            if (runing_time < 12.0):
+            # if (runing_time < 12.0):
+            if (runing_time < 100.0):
                 # Stand up in first 3 second
                 #print("stand up")
                 # Total time for standing up or standing down is about 1.2s
-                phase = np.tanh(runing_time / 4.8)
+                # phase = np.tanh(runing_time / 4.8)
+                phase = np.tanh(runing_time / 80.0)
+
+                cmd_msg.head[0] = 0xFE
+                cmd_msg.head[1] = 0xEF
+                cmd_msg.level_flag = 0xFF
+                cmd_msg.gpio = 0
                 for i in range(12):
+                    cmd_msg.motor_cmd[i].mode = 0x01 # 0x0A
                     cmd_msg.motor_cmd[i].q = phase * self.default_dof_pos[i] + (
                         1 - phase) * self.start_dof_pos[i]
                     cmd_msg.motor_cmd[i].kp = phase * 50.0 + (1 - phase) * 20.0
@@ -731,10 +742,10 @@ class SLRInference(Node):
                     cmd_msg.motor_cmd[i].kd = 3.5
                     cmd_msg.motor_cmd[i].tau = 0.0
 
-                    #print("desired position when standing up ", cmd_msg.motor_cmd[i].q)
-                    # cmd_msg.crc = self.crc.Crc(cmd_msg)
+                    # print("desired position when standing up ", cmd_msg.motor_cmd[i].q)
+                    # cmd_msg.crc = Crc(cmd_msg)
 
-                #get_crc(cmd_msg)
+                # get_crc(cmd_msg)
                 self.lowcmd_puber.publish(cmd_msg)  # Publish lowcmd message
                 
 
@@ -742,12 +753,14 @@ class SLRInference(Node):
                 break
 
         self.standup_completed = True
+        self.get_logger().info("StandUp completed, transitioning to gait control")
  
+
     def init_cmd(self):
         cmd_msg = LowCmd()
         # Initialize the motor_cmd list with 20 MotorCmd objects
         for i in range(20):
-            cmd_msg.motor_cmd[i].mode = 0x01  # Set torque mode, 0x00 is passive mode
+            cmd_msg.motor_cmd[i].mode = 0x01 #0x0A  # Set torque mode, 0x00 is passive mode
             cmd_msg.motor_cmd[i].q = 0.0
             cmd_msg.motor_cmd[i].kp = 0.0
             cmd_msg.motor_cmd[i].dq = 0.0
